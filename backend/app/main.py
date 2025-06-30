@@ -1,5 +1,9 @@
 # ~/app/main.py
 import logging
+from typing import Dict, Any, List, Union
+import time
+import datetime
+import threading
 import cv2
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -8,6 +12,7 @@ from pathlib import Path
 import asyncio
 import uvloop
 from concurrent.futures import ThreadPoolExecutor
+from app.network.lan_output import LANOutput
 
 # Import components
 from app.camera_factory import CameraFactory
@@ -16,6 +21,7 @@ from app.detection.shape_analyzer import ShapeAnalyzer
 from app.detection.object_detector import ObjectDetector
 from app.schemas.detection import DetectionResult
 from typing import List
+from app.network.osc_output import OSCOutput
 
 # Configure logging
 logging.basicConfig(
@@ -48,6 +54,45 @@ analyzer = ShapeAnalyzer()
 streamer = WebRTCStreamer(detector, analyzer)
 stream_active = False
 
+# Enable debug printing for network outputs
+lan_output = LANOutput(host='255.255.255.255', port=5000, debug=True)
+osc_output = OSCOutput(ip='localhost', port=5005, debug=True)
+
+def start_continuous_outputs():
+    """Start continuous LAN and OSC output in background threads with error handling"""
+    def lan_continuous():
+        while True:
+            try:
+                test_data = {
+                    "type": "continuous_lan",
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "values": [1.2, 3.4, 5.6]
+                }
+                lan_output.send_data(test_data)
+                logger.debug("Sent continuous LAN data")
+            except Exception as e:
+                logger.error(f"LAN continuous output error: {str(e)}")
+            time.sleep(1.0)
+            
+    def osc_continuous():
+        while True:
+            try:
+                test_data = {
+                    "test": "continuous_osc",
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "values": [7.8, 9.0, 1.2]
+                }
+                osc_output.send_data("/continuous", test_data)
+                logger.debug("Sent continuous OSC data")
+            except Exception as e:
+                logger.error(f"OSC continuous output error: {str(e)}")
+            time.sleep(1.0)
+    
+    # Start both continuous outputs
+    executor.submit(lan_continuous)
+    executor.submit(osc_continuous)
+    logger.info("Started continuous LAN and OSC output threads")
+
 @app.on_event("startup")
 async def startup():
     global camera
@@ -57,7 +102,7 @@ async def startup():
             raise RuntimeError("Failed to initialize any camera")
         
         logger.info(f"Using camera: {camera.get_camera_info()}")
-        
+        # Start continuous outputs
     except Exception as e:
         logger.error(f"Startup failed: {str(e)}")
         raise
@@ -65,10 +110,13 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     global stream_active
-    stream_active = False
+    stream_active = False   
     if camera:
         camera.release()
+    lan_output.close()
+    osc_output.close()
     logger.info("Application shutdown")
+    executor.shutdown(wait=True)
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
@@ -101,22 +149,89 @@ async def detect_objects():
         if frame is None:
             raise HTTPException(status_code=503, detail="No frame available")
         
+        # Get detection and timing data
+        start_time = time.time()
         detections = detector.detect(frame)
+        inference_time = (time.time() - start_time) * 1000  # Convert to ms
+        
         results = []
         
         for det in detections:
             shape = analyzer.analyze(frame, depth, det)
             if shape:
-                results.append(DetectionResult(
+                result = DetectionResult(
                     label=det.label,
                     confidence=det.confidence,
                     shape_3d=shape
-                ))
-        
+                )
+                results.append(result)
+                
+                # Prepare the performance data
+                perf_data = {
+                    'resolution': f"{frame.shape[0]}x{frame.shape[1]}",
+                    'inference_time': inference_time,
+                    'num_detections': len(detections),
+                    'detection': result.dict(),
+                    'timestamp': datetime.datetime.now().isoformat()
+                }
+                
+                # Send detection over LAN
+                try:
+                    lan_output.async_send({
+                        'type': 'detection',
+                        'data': perf_data
+                    })
+                except Exception as e:
+                    logger.error(f"Failed to send LAN data: {str(e)}")
+                
+                # Send detection via OSC
+                try:
+                    osc_data = {
+                        'label': det.label,
+                        'confidence': float(det.confidence),
+                        'x': (det.bbox[0] + det.bbox[2]) / 2 / frame.shape[1],
+                        'y': (det.bbox[1] + det.bbox[3]) / 2 / frame.shape[0],
+                        'width': (det.bbox[2] - det.bbox[0]) / frame.shape[1],
+                        'height': (det.bbox[3] - det.bbox[1]) / frame.shape[0],
+                        'shape_type': shape.shape_type,
+                        'shape_width': float(shape.width),
+                        'shape_height': float(shape.height),
+                        'shape_depth': float(shape.depth),
+                        'inference_time': inference_time,
+                        'resolution': f"{frame.shape[0]}x{frame.shape[1]}"
+                    }
+                    osc_output.async_send("/detection", osc_data)
+                except Exception as e:
+                    logger.error(f"Failed to send OSC data: {str(e)}")
+
+        # Log the performance data (this matches your example output)
+        logger.info(
+            f"0: {frame.shape[0]}x{frame.shape[1]} "
+            f"{len(detections)} objects, {inference_time:.1f}ms\n"
+            f"Speed: {preprocess_time:.1f}ms preprocess, "
+            f"{inference_time:.1f}ms inference, "
+            f"{postprocess_time:.1f}ms postprocess per image at shape (1, 3, {frame.shape[0]}, {frame.shape[1]})"
+        )
+
         return results
+
     except Exception as e:
         logger.error(f"Detection failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/osc_output")
+async def send_osc_output(address: str = "/data", data: Dict[str, Any] = None):
+    """Manual endpoint to send custom data via OSC"""
+    if data is None:
+        data = {}
+    osc_output.async_send(address, data)
+    return {"message": f"Data sent via OSC to {address}"}
+
+@app.post("/api/lan_output")
+async def send_lan_output(data: Dict[str, Any]):
+    """Manual endpoint to send custom data over LAN"""
+    lan_output.async_send(data)
+    return {"message": "Data sent to LAN"}
 
 @app.get("/api/status")
 async def get_status():
@@ -124,8 +239,23 @@ async def get_status():
         "status": "running",
         "camera": camera.get_camera_info() if camera else "none",
         "stream": "active" if stream_active else "inactive",
-        "depth_capable": camera.has_depth_capability() if camera else False
+        "depth_capable": camera.has_depth_capability() if camera else False,
+        "lan_connected": lan_output.socket is not None if hasattr(lan_output, 'socket') else False,
+        "osc_connected": osc_output.client is not None,
+        "lan_debug": lan_output.debug,
+        "osc_debug": osc_output.debug
     }
+
+@app.get("/api/threads")
+async def get_thread_status():
+    threads = []
+    for thread in threading.enumerate():
+        threads.append({
+            "name": thread.name,
+            "alive": thread.is_alive(),
+            "daemon": thread.daemon
+        })
+    return threads
 
 @app.post("/api/control/start")
 async def start_stream():
@@ -181,6 +311,7 @@ async def original_feed():
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
 
+
 @app.get("/processed_feed")
 async def processed_feed():
     async def generate():
@@ -195,12 +326,14 @@ async def processed_feed():
                 continue
             
             try:
-                # Process the frame with your detector and analyzer
+                start_time = time.time()
                 detections = detector.detect(frame)
+                inference_time = (time.time() - start_time) * 1000
+                
                 processed_frame = frame.copy()
                 
                 for det in detections:
-                    shape = analyzer.analyze(frame, None, det)  # Passing None for depth since you're using webcam
+                    shape = analyzer.analyze(frame, None, det)
                     if shape:
                         # Draw bounding box
                         x1, y1, x2, y2 = det.bbox
@@ -210,10 +343,36 @@ async def processed_feed():
                         label = f"{det.label} ({det.confidence:.2f})"
                         cv2.putText(processed_frame, label, (x1, y1 - 10), 
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                        
+                        # Send detection data
+                        perf_data = {
+                            'resolution': f"{frame.shape[0]}x{frame.shape[1]}",
+                            'inference_time': inference_time,
+                            'detection': {
+                                'label': det.label,
+                                'confidence': det.confidence,
+                                'bbox': det.bbox,
+                                'shape': shape.shape_type if shape else None
+                            }
+                        }
+                        
+                        lan_output.async_send(perf_data)
+                        osc_output.async_send("/detection", {
+                            **perf_data['detection'],
+                            'inference_time': perf_data['inference_time'],
+                            'resolution': perf_data['resolution']
+                        })
+                
+                # Log performance
+                logger.info(
+                    f"0: {frame.shape[0]}x{frame.shape[1]} "
+                    f"{len(detections)} objects, {inference_time:.1f}ms"
+                )
                 
                 _, buffer = cv2.imencode('.jpg', processed_frame)
                 yield (b'--frame\r\n'
                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            
             except Exception as e:
                 logger.error(f"Frame processing error: {str(e)}")
                 break
@@ -224,6 +383,28 @@ async def processed_feed():
         generate(),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
+
+@app.get("/api/test/lan")
+async def test_lan_output():
+    """Test endpoint for LAN output"""
+    test_data = {
+        "test": "LAN_TEST",
+        "timestamp": datetime.datetime.now().isoformat(),
+        "values": [1.2, 3.4, 5.6]
+    }
+    lan_output.async_send(test_data)
+    return {"message": "LAN test data sent", "data": test_data}
+
+@app.get("/api/test/osc")
+async def test_osc_output():
+    """Test endpoint for OSC output"""
+    test_data = {
+        "test": "OSC_TEST",
+        "timestamp": datetime.datetime.now().isoformat(),
+        "values": [7.8, 9.0, 1.2]
+    }
+    osc_output.async_send("/test", test_data)
+    return {"message": "OSC test data sent", "data": test_data}
 
 if __name__ == "__main__":
     import uvicorn
