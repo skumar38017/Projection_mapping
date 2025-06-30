@@ -1,11 +1,12 @@
 # ~/app/camera/capture.py
-
 import cv2
 import numpy as np
 import threading
 import queue
-import os
+import logging
 from typing import Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 class CameraCapture:
     def __init__(self, source: str = "0", use_gstreamer: bool = False):
@@ -16,6 +17,7 @@ class CameraCapture:
         self.running = False
         self.thread = None
         self.current_frame = None
+        self._depth_placeholder = None
         
     def _gstreamer_pipeline(self) -> str:
         return (
@@ -25,48 +27,75 @@ class CameraCapture:
         )
     
     def start(self):
-        if self.use_gstreamer:
-            pipeline = self._gstreamer_pipeline()
-            self.cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
-        else:
-            self.cap = cv2.VideoCapture(int(self.source))
-        
-        if not self.cap.isOpened():
-            raise RuntimeError("Could not open camera")
-        
-        self.running = True
-        self.thread = threading.Thread(target=self._capture_loop, daemon=True)
-        self.thread.start()
-    
+        try:
+            if self.use_gstreamer:
+                pipeline = self._gstreamer_pipeline()
+                self.cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+            else:
+                self.cap = cv2.VideoCapture(int(self.source))
+            
+            if not self.cap.isOpened():
+                raise RuntimeError("Could not open camera")
+            
+            self.running = True
+            self.thread = threading.Thread(
+                target=self._capture_loop, 
+                daemon=True,
+                name="CameraCaptureThread"
+            )
+            self.thread.start()
+            logger.info(f"Camera started (source: {self.source})")
+        except Exception as e:
+            logger.error(f"Failed to start camera: {str(e)}")
+            raise
+
     def stop(self):
         self.running = False
         if self.thread is not None:
-            self.thread.join()
+            self.thread.join(timeout=1.0)
         if self.cap is not None:
             self.cap.release()
+        logger.info("Camera stopped")
     
     def _capture_loop(self):
         while self.running:
-            ret, frame = self.cap.read()
-            if not ret:
-                continue
-            
-            # Update current frame
-            self.current_frame = frame.copy()
-            
-            # Put frame in queue (discard old frame if queue is full)
-            if self.frame_queue.full():
-                try:
+            try:
+                ret, frame = self.cap.read()
+                if not ret:
+                    logger.warning("Failed to read frame from camera")
+                    continue
+                
+                self.current_frame = frame.copy()
+                
+                if self.frame_queue.full():
                     self.frame_queue.get_nowait()
-                except queue.Empty:
-                    pass
-            self.frame_queue.put(frame)
+                self.frame_queue.put(frame)
+                
+            except Exception as e:
+                logger.error(f"Error in capture loop: {str(e)}")
+                break
     
     def get_frame(self, timeout: float = 1.0) -> Optional[np.ndarray]:
         try:
+            if self.current_frame is not None:
+                return self.current_frame.copy()
             return self.frame_queue.get(timeout=timeout)
         except queue.Empty:
+            logger.warning("Timeout while waiting for frame")
             return None
     
     def get_current_frame(self) -> Optional[np.ndarray]:
         return self.current_frame
+    
+    def get_depth_frame(self) -> Optional[np.ndarray]:
+        """Return placeholder depth frame for compatibility"""
+        if self._depth_placeholder is None and self.current_frame is not None:
+            h, w = self.current_frame.shape[:2]
+            self._depth_placeholder = np.zeros((h, w), dtype=np.float32)
+        return self._depth_placeholder
+    
+    def has_depth_capability(self) -> bool:
+        return False
+    
+    def get_camera_info(self) -> Tuple[str, str]:
+        return ("Webcam", "Standard webcam without depth sensing")

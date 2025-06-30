@@ -5,6 +5,7 @@ import numpy as np
 from typing import Optional, Tuple
 import mediapipe as mp
 from app.schemas.detection import Shape3D
+from .object_detector import Detection 
 
 class ShapeAnalyzer:
     def __init__(self):
@@ -12,7 +13,7 @@ class ShapeAnalyzer:
         self.mp_objectron = mp.solutions.objectron
         self.objectron = self.mp_objectron.Objectron(
             static_image_mode=False,
-            max_num_objects=50,
+            max_num_objects=20,
             min_detection_confidence=0.5,
             model_name='Cup'  # Can be changed based on expected objects
         )
@@ -29,10 +30,35 @@ class ShapeAnalyzer:
             # Add more known widths for common objects
         }
     
-    def analyze(self, image: np.ndarray, bbox: Tuple[int, int, int, int]) -> Optional[Shape3D]:
+    def _analyze_without_depth(self, frame: np.ndarray, detection: Detection) -> Optional[Shape3D]:
+        """Analyze shape when depth information is not available"""
+        x1, y1, x2, y2 = detection.bbox
+        roi = frame[y1:y2, x1:x2]
+        
+        # Use contour-based analysis as fallback
+        shape = self._contour_based_shape_detection(roi)
+    
+        if shape:
+            # Adjust dimensions based on detection confidence and known widths
+            if detection.label.lower() in self.known_widths:
+                known_width = self.known_widths[detection.label.lower()]
+                scale_factor = known_width / shape.width
+                shape.width = known_width
+                shape.height *= scale_factor
+                shape.depth *= scale_factor
+            else:
+                # Default scaling for unknown objects
+                shape.depth = 0.1 * shape.width
+    
+        return shape
+
+    def analyze(self, frame: np.ndarray, depth: Optional[np.ndarray], detection: Detection) -> Optional[Shape3D]:
         """Analyze the shape within the bounding box and estimate 3D dimensions"""
-        x1, y1, x2, y2 = bbox
-        roi = image[y1:y2, x1:x2]
+        if depth is None:
+            return self._analyze_without_depth(frame, detection)
+        
+        x1, y1, x2, y2 = detection.bbox
+        roi = frame[y1:y2, x1:x2]
         
         # Convert to RGB for MediaPipe
         roi_rgb = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
@@ -64,7 +90,7 @@ class ShapeAnalyzer:
                 # Estimate real-world dimensions
                 # For better accuracy, you should use depth information or stereo camera
                 # Here we use a simple perspective projection approximation
-                distance = self._estimate_distance(bbox, image.shape)
+                distance = self._estimate_distance(detection.bbox, frame.shape)
                 
                 width_m = (width_px * distance) / self.focal_length
                 height_m = (height_px * distance) / self.focal_length
