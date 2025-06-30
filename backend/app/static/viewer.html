@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>3D Projection Viewer</title>
+    <style>
+        body { 
+            margin: 0; 
+            font-family: Arial, sans-serif;
+            background: #222;
+            color: white;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+        .video-container {
+            display: flex;
+            width: 100%;
+            max-width: 1200px;
+            justify-content: center;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .video-box {
+            flex: 1;
+            min-width: 0;
+            text-align: center;
+        }
+        .video-box h3 {
+            margin-top: 0;
+        }
+        .video-feed {
+            width: 100%;
+            max-width: 600px;
+            border: 2px solid #444;
+            background: black;
+        }
+        .controls {
+            margin: 20px 0;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        button {
+            padding: 10px 20px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:disabled {
+            background: #cccccc;
+        }
+        select {
+            padding: 10px;
+            font-size: 16px;
+            background: #333;
+            color: white;
+            border: 1px solid #666;
+            border-radius: 4px;
+        }
+        .status {
+            margin-top: 20px;
+            padding: 10px;
+            background: #333;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .error {
+            color: #ff4444;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>3D Camera Projection Viewer</h1>
+        
+        <div class="video-container">
+            <div class="video-box">
+                <h3>Original Video</h3>
+                <img id="originalFeed" class="video-feed">
+                <div id="originalError" class="error"></div>
+            </div>
+            <div class="video-box">
+                <h3>3D Processed Video</h3>
+                <img id="processedFeed" class="video-feed">
+                <div id="processedError" class="error"></div>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <select id="cameraSelect">
+                <option value="front">Front Camera</option>
+                <option value="rear">Rear Camera</option>
+            </select>
+            <button id="startBtn">Start Stream</button>
+            <button id="stopBtn" disabled>Stop Stream</button>
+        </div>
+        
+        <div class="status" id="status">
+            Status: Ready
+        </div>
+    </div>
+
+    <script>
+        const originalFeed = document.getElementById('originalFeed');
+        const processedFeed = document.getElementById('processedFeed');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const statusDiv = document.getElementById('status');
+        const originalError = document.getElementById('originalError');
+        const processedError = document.getElementById('processedError');
+        const cameraSelect = document.getElementById('cameraSelect');
+        
+        function updateVideoSources() {
+            const timestamp = new Date().getTime();
+            originalError.textContent = '';
+            processedError.textContent = '';
+            originalFeed.src = `/original_feed?t=${timestamp}`;
+            processedFeed.src = `/processed_feed?t=${timestamp}`;
+            originalFeed.onerror = () => {
+                originalError.textContent = 'Error loading original video feed';
+            };
+            processedFeed.onerror = () => {
+                processedError.textContent = 'Error loading processed video feed';
+            };
+        }
+        
+        startBtn.addEventListener('click', async () => {
+            const selectedCamera = cameraSelect.value;
+            try {
+                const response = await fetch('/api/control/start', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ camera: selectedCamera })
+                });
+                const data = await response.json();
+                updateStatus(data.message);
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                updateVideoSources();
+            } catch (error) {
+                updateStatus('Error starting stream: ' + error.message);
+            }
+        });
+        
+        stopBtn.addEventListener('click', async () => {
+            try {
+                const response = await fetch('/api/control/stop', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                updateStatus(data.message);
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+                originalFeed.src = '';
+                processedFeed.src = '';
+            } catch (error) {
+                updateStatus('Error stopping stream: ' + error.message);
+            }
+        });
+        
+        async function updateStatus(message) {
+            statusDiv.textContent = `Status: ${message}`;
+            try {
+                const response = await fetch('/api/status');
+                const status = await response.json();
+                statusDiv.textContent += ` | Camera: ${status.camera} | Stream: ${status.stream}`;
+            } catch (error) {
+                console.error('Error getting status:', error);
+            }
+        }
+
+        updateStatus('Ready');
+    </script>
+</body>
+</html>
