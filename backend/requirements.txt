@@ -14,6 +14,7 @@ contourpy==1.3.2
 cryptography==45.0.4
 cupy-cuda11x==13.4.1
 cycler==0.12.1
+depthai==2.30.0.0
 dnspython==2.7.0
 email_validator==2.2.0
 exceptiongroup==1.3.0
@@ -37,12 +38,14 @@ httptools==0.6.4
 httpx==0.28.1
 idna==3.10
 ifaddr==0.2.0
+imageio==2.37.0
 itsdangerous==2.2.0
 jax==0.6.2
 jaxlib==0.6.2
 Jinja2==3.1.6
 keras==3.10.0
 kiwisolver==1.4.8
+lazy_loader==0.4
 libclang==18.1.1
 Markdown==3.8.2
 markdown-it-py==3.0.0
@@ -98,6 +101,7 @@ PyYAML==6.0.2
 requests==2.32.4
 rich==14.0.0
 rich-toolkit==0.14.7
+scikit-image==0.25.2
 scipy==1.15.3
 sentencepiece==0.2.0
 shellingham==1.5.4
@@ -112,6 +116,7 @@ tensorflow==2.19.0
 tensorflow-io-gcs-filesystem==0.37.1
 termcolor==3.1.0
 tflite-runtime==2.14.0
+tifffile==2025.5.10
 torch==2.7.1
 torchvision==0.22.1
 tqdm==4.67.1

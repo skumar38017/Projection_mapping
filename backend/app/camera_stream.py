@@ -13,7 +13,7 @@ except ImportError:
     print("CuPy not available - falling back to CPU mode")
 
 class Camera:
-    def __init__(self, src=0, gpu=False, buffer_size=3):
+    def __init__(self, src=0, gpu=False, buffer_size=10):
         self.cap = cv2.VideoCapture(src)
         if not self.cap.isOpened():
             raise RuntimeError("Could not open video source")

@@ -12,7 +12,7 @@ class ShapeAnalyzer:
         self.mp_objectron = mp.solutions.objectron
         self.objectron = self.mp_objectron.Objectron(
             static_image_mode=False,
-            max_num_objects=5,
+            max_num_objects=50,
             min_detection_confidence=0.5,
             model_name='Cup'  # Can be changed based on expected objects
         )
