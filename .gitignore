@@ -27,6 +27,7 @@ share/python-wheels/
 MANIFEST
 cv2
 np
+*.pt
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
