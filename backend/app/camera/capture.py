@@ -13,7 +13,7 @@ class CameraCapture:
         self.source = source
         self.use_gstreamer = use_gstreamer
         self.cap = None
-        self.frame_queue = queue.Queue(maxsize=1)
+        self.frame_queue = queue.Queue(maxsize=2)
         self.running = False
         self.thread = None
         self.current_frame = None
