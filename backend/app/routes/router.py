@@ -60,12 +60,31 @@ async def home():
 @router.websocket("/ws/stream")
 async def websocket_stream(websocket: WebSocket):
     await websocket.accept()
+    last_frame_time = time.time()
+    target_fps = 30
+    
     try:
-        await streamer.handle_connection(websocket)
+        while True:
+            current_time = time.time()
+            elapsed = current_time - last_frame_time
+            wait_time = max(0, (1.0/target_fps) - elapsed)
+            
+            await asyncio.sleep(wait_time)
+            
+            if not camera:
+                continue
+                
+            frame = await camera.get_frame(timeout=0.1)
+            if frame is None:
+                continue
+                
+            _, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+            await websocket.send_bytes(buffer.tobytes())
+            
+            last_frame_time = time.time()
+            
     except WebSocketDisconnect:
         logger.info("Client disconnected")
-    except Exception as e:
-        logger.error(f"WebSocket error: {str(e)}")
 
 @router.post("/api/detect", response_model=List[DetectionResult])
 async def detect_objects():
@@ -212,27 +231,37 @@ async def stop_stream():
 
 @router.get("/original_feed")
 async def original_feed():
+    """Optimized original video feed"""
     async def generate():
-        while True:
-            if not stream_active or not camera:
-                await asyncio.sleep(0.1)
-                continue
-                
-            frame = await camera.get_frame()
-            if frame is None:
-                # Return a black frame if no valid frame available
-                frame = np.zeros((480, 640, 3), dtype=np.uint8)
-            
+        last_frame_time = time.time()
+        target_fps = 30
+        frame_interval = 1.0 / target_fps
+        
+        while stream_active and camera:
             try:
-                _, buffer = cv2.imencode('.jpg', frame)
+                current_time = time.time()
+                elapsed = current_time - last_frame_time
+                
+                if elapsed < frame_interval:
+                    await asyncio.sleep(frame_interval - elapsed)
+                    continue
+                
+                frame = await camera.get_frame(timeout=0.1)
+                if frame is None:
+                    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                
+                # JPEG encode with lower quality for speed
+                _, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+                
                 yield (b'--frame\r\n'
                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+                
+                last_frame_time = time.time()
+                
             except Exception as e:
-                logger.error(f"Frame encoding error: {str(e)}")
+                logger.error(f"Feed error: {str(e)}")
                 break
-            
-            await asyncio.sleep(1/30)  # Control frame rate
-            
+    
     return StreamingResponse(
         generate(),
         media_type="multipart/x-mixed-replace; boundary=frame"

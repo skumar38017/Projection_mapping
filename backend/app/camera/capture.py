@@ -110,29 +110,31 @@ class AsyncCameraCapture:
         return self._is_capturing
     
     async def _capture_loop(self):
-        """Async loop for capturing frames"""
+        """Optimized async loop for capturing frames"""
         while self._running:
             try:
-                ret, frame = self.cap.read()
-                if not ret:
-                    logger.warning("Failed to read frame from camera")
-                    await asyncio.sleep(0.1)
-                    continue
-                
-                self._current_frame = frame.copy()
-                
+                # Skip queue if consumer is slow
                 if self.frame_queue.full():
                     await self.frame_queue.get()
-                await self.frame_queue.put(frame)
                 
-                # Small sleep to prevent CPU overload
+                ret, frame = self.cap.read()
+                if not ret:
+                    continue
+                    
+                # Convert to RGB and resize if needed
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frame = cv2.resize(frame, (640, 480))  # Fixed smaller size
+                
+                # Put frame in queue without waiting
+                self.frame_queue.put_nowait(frame)
+                self._current_frame = frame
+                
+                # Non-blocking sleep
                 await asyncio.sleep(0)
                 
             except Exception as e:
-                logger.error(f"Error in async capture loop: {str(e)}")
-                self._running = False
-                self._is_capturing = False
-                break
+                logger.error(f"Capture error: {str(e)}")
+                await asyncio.sleep(0.1)
     
     async def get_frame(self, timeout: float = 1.0) -> Optional[np.ndarray]:
         """Get a frame asynchronously with timeout"""
