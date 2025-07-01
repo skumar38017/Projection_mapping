@@ -79,7 +79,7 @@ optree==0.16.0
 orjson==3.10.18
 packaging==25.0
 pandas==2.3.0
-pillow==11.2.1
+pillow==11.3.0
 protobuf==4.25.8
 psutil==7.0.0
 py-cpuinfo==9.0.0
