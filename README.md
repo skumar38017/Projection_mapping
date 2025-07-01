@@ -20,12 +20,12 @@ Projection mapping — also known as **spatial augmented reality** — turns phy
 
 ### Prerequisites
 
-- Python 3.11
+- Python 3.10
 - pip (Python package manager)
 
 ### Installation
 
 ```bash
-git clone https://github.com/your-username/Projection_mapping.git
-cd Projection_mapping
+git clone [repo](https://github.com/your-username/Projection_mapping.git)
+cd Projection_mapping/backend
 pip install -r requirements.txt
