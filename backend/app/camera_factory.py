@@ -12,7 +12,7 @@ class CameraFactory:
     async def create_camera(
         use_depthai: bool = True, 
         max_retries: int = 3,
-        preferred_indices: list = [0, 1, 2, '/dev/video0', '/dev/video1', '/dev/video2']
+        preferred_indices: list = [0, 1, 2, '/dev/video0', '/dev/video1', '/dev/video2', '/dev/video3', '/dev/video4']
     ) -> Optional[Union[DepthAICamera, AsyncCameraCapture]]:
         """Create appropriate camera instance with fallback
         

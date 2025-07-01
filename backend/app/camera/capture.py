@@ -24,7 +24,7 @@ class AsyncCameraCapture:
     def _gstreamer_pipeline(self) -> str:
         return (
             f"v4l2src device=/dev/video{self.source} ! "
-            "video/x-raw, width=1280, height=1080, framerate=60/1 ! "
+            "video/x-raw, width=1280, height=1080, framerate=30/1 ! "
             "videoconvert ! appsink"
         )
     
