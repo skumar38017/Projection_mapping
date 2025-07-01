@@ -1,1 +1,14 @@
 uvicorn app.main:app --reload
+
+
+###################################################
+########### Camera command
+####################################################
+
+sudo usermod -a -G video $USER
+v4l2-ctl --list-devices
+v4l2-ctl -d /dev/video0 --list-formats-ext
+ffplay -f v4l2 -input_format mjpeg -framerate 60  /dev/video0
+
+
+###################################################

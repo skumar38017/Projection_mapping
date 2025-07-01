@@ -2,8 +2,9 @@
 import depthai as dai
 import numpy as np
 import cv2
-from typing import Optional, Tuple
+import asyncio
 import logging
+from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -13,24 +14,61 @@ class DepthAICamera:
         self.device = None
         self.rgb_queue = None
         self.depth_queue = None
+        self._current_frame = None
+        self._current_depth = None
         self._has_depthai = True
         
         try:
-            # First check if any DepthAI device is available
             available_devices = dai.Device.getAllAvailableDevices()
             if not available_devices:
                 raise RuntimeError("No DepthAI devices found")
-                
+        except Exception as e:
+            self._has_depthai = False
+            logger.warning(f"DepthAI check failed: {str(e)}")
+            raise RuntimeError("DepthAI not available")
+
+    async def start(self):
+        """Initialize and start DepthAI camera asynchronously"""
+        try:
             self.pipeline = self._create_pipeline()
             self.device = dai.Device(self.pipeline)
             self.rgb_queue = self.device.getOutputQueue("rgb", maxSize=4, blocking=False)
             self.depth_queue = self.device.getOutputQueue("depth", maxSize=4, blocking=False)
-            
-            logger.info("Successfully initialized DepthAI camera")
+            self._running = True
+            logger.info("DepthAI camera started")
         except Exception as e:
-            self._has_depthai = False
-            logger.warning(f"DepthAI initialization failed: {str(e)}")
-            raise RuntimeError("DepthAI camera not available")
+            logger.error(f"Failed to start DepthAI camera: {str(e)}")
+            raise
+
+    async def stop(self):
+        """Stop DepthAI camera asynchronously"""
+        self._running = False
+        if self.device:
+            self.device.close()
+        logger.info("DepthAI camera stopped")
+
+    async def get_frame(self) -> Optional[np.ndarray]:
+        """Get RGB frame asynchronously"""
+        if not self._running:
+            return None
+        try:
+            frame = self.rgb_queue.get().getCvFrame()
+            self._current_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            return self._current_frame.copy()
+        except Exception as e:
+            logger.error(f"Error getting frame: {str(e)}")
+            return None
+
+    async def get_depth_frame(self) -> Optional[np.ndarray]:
+        """Get depth frame asynchronously"""
+        if not self._running:
+            return None
+        try:
+            self._current_depth = self.depth_queue.get().getFrame()
+            return self._current_depth.copy()
+        except Exception as e:
+            logger.error(f"Error getting depth frame: {str(e)}")
+            return None
 
     def _create_pipeline(self) -> dai.Pipeline:
         """Create DepthAI pipeline for stereo depth calculation"""
@@ -66,45 +104,15 @@ class DepthAICamera:
         
         return pipeline
 
-    def get_frame(self) -> Optional[np.ndarray]:
-        """Get RGB frame"""
-        if not self._running:
-            return None
-            
-        try:
-            frame = self.rgb_queue.get().getCvFrame()
-            return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        except Exception as e:
-            logger.error(f"Error getting frame: {str(e)}")
-            return None
-
-    def get_depth_frame(self) -> Optional[np.ndarray]:
-        """Get depth frame"""
-        if not self._running:
-            return None
-            
-        try:
-            return self.depth_queue.get().getFrame()
-        except Exception as e:
-            logger.error(f"Error getting depth frame: {str(e)}")
-            return None
-
-    def start(self):
-        self._running = True
-        logger.info("DepthAI camera started")
-
-    def stop(self):
-        self._running = False
-        logger.info("DepthAI camera stopped")
-
-    def release(self):
-        self.stop()
-        if self.device:
-            self.device.close()
-            logger.info("DepthAI camera released")
-
     def has_depth_capability(self) -> bool:
         return self._has_depthai
 
     def get_camera_info(self) -> Tuple[str, str]:
         return ("OAK-D", "DepthAI camera with stereo depth")
+
+    async def __aenter__(self):
+        await self.start()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.stop()

@@ -1,29 +1,28 @@
 # ~/app/main.py
-import logging
-from typing import Dict, Any, List, Union
-import time
-import datetime
-import threading
-import cv2
-from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles  # Add this import
+import os
 from pathlib import Path
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+import logging
 import asyncio
 import uvloop
 from concurrent.futures import ThreadPoolExecutor
+import time
+import datetime
+import numpy as np
+from app.camera_factory import CameraFactory
 from app.network.lan_output import LANOutput
 from app.network.osc_output import OSCOutput
-from app.camera_factory import CameraFactory
 from app.routes.router import router, init_routers
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Suppress TensorFlow logging
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
+# Initialize logging and uvloop
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 uvloop.install()
+
 app = FastAPI(
     title="3D Shape Detection API",
     description="Advanced 3D shape detection with real-time streaming",
@@ -42,74 +41,105 @@ executor = ThreadPoolExecutor(max_workers=4)
 
 # Initialize components
 camera = None
-lan_output = LANOutput(host='255.255.255.255', port=5000, debug=True)
-osc_output = OSCOutput(ip='localhost', port=5005, debug=True)
+lan_output = None
+osc_output = None
+stream_active = False
 
-def start_continuous_outputs():
-    """Start continuous LAN and OSC output in background threads with error handling"""
-    def lan_continuous():
-        while True:
-            try:
-                test_data = {
-                    "type": "continuous_lan",
-                    "timestamp": datetime.datetime.now().isoformat(),
-                    "values": [1.2, 3.4, 5.6]
-                }
-                lan_output.send_data(test_data)
-                logger.debug("Sent continuous LAN data")
-            except Exception as e:
-                logger.error(f"LAN continuous output error: {str(e)}")
-            time.sleep(1.0)
-            
-    def osc_continuous():
-        while True:
-            try:
-                test_data = {
-                    "test": "continuous_osc",
-                    "timestamp": datetime.datetime.now().isoformat(),
-                    "values": [7.8, 9.0, 1.2]
-                }
-                osc_output.send_data("/continuous", test_data)
-                logger.debug("Sent continuous OSC data")
-            except Exception as e:
-                logger.error(f"OSC continuous output error: {str(e)}")
-            time.sleep(1.0)
+async def camera_processing_loop():
+    """Main processing loop that handles camera frames and data output"""
+    global camera, lan_output, osc_output, stream_active
     
-    # Start both continuous outputs
-    executor.submit(lan_continuous)
-    executor.submit(osc_continuous)
-    logger.info("Started continuous LAN and OSC output threads")
+    while stream_active:
+        try:
+            if not camera:
+                await asyncio.sleep(0.1)
+                continue
+                
+            frame = await camera.get_frame()
+            if frame is None:
+                await asyncio.sleep(0.1)
+                continue
+                
+            # Process the frame (detections, etc)
+            # This is where you'd add your processing logic
+            
+            # Create data packet
+            frame_data = {
+                "timestamp": datetime.datetime.now().isoformat(),
+                "resolution": f"{frame.shape[1]}x{frame.shape[0]}",
+                "frame_size": frame.size,
+                "channels": frame.shape[2] if len(frame.shape) > 2 else 1
+            }
+            
+            # Print to terminal
+            logger.info(f"Frame data: {frame_data}")
+            
+            # Send via LAN
+            if lan_output:
+                try:
+                    lan_output.async_send({
+                        "type": "frame_data",
+                        "data": frame_data
+                    })
+                except Exception as e:
+                    logger.error(f"LAN send error: {str(e)}")
+            
+            # Send via OSC
+            if osc_output:
+                try:
+                    osc_output.async_send("/frame", frame_data)
+                except Exception as e:
+                    logger.error(f"OSC send error: {str(e)}")
+                    
+            await asyncio.sleep(1/30)  # ~30 FPS
+            
+        except Exception as e:
+            logger.error(f"Processing loop error: {str(e)}")
+            await asyncio.sleep(1)
 
 @app.on_event("startup")
 async def startup():
-    global camera
+    global camera, lan_output, osc_output, stream_active
+    
     try:
-        camera = CameraFactory.create_camera()
-        if camera is None:
-            raise RuntimeError("Failed to initialize any camera")
+        # Initialize network outputs first
+        lan_output = LANOutput(host='255.255.255.255', port=5000, debug=True)
+        osc_output = OSCOutput(ip='localhost', port=5005, debug=True)
         
-        logger.info(f"Using camera: {camera.get_camera_info()}")
+        # Initialize camera
+        camera = await CameraFactory.create_camera()
+        if not camera:
+            raise RuntimeError("Failed to initialize camera")
         
-        # Initialize routers with dependencies
+        # Initialize routers
         init_routers(camera, lan_output, osc_output, executor, STATIC_DIR)
-        
-        # Include the router
         app.include_router(router)
         
-        # Start continuous outputs
-        start_continuous_outputs()
+        # Start processing loop
+        stream_active = True
+        asyncio.create_task(camera_processing_loop())
+        
+        logger.info("Application startup complete")
+        
     except Exception as e:
         logger.error(f"Startup failed: {str(e)}")
         raise
 
 @app.on_event("shutdown")
 async def shutdown():
+    global stream_active
+    
+    stream_active = False
     if camera:
-        camera.release()
-    lan_output.close()
-    osc_output.close()
+        await camera.stop()
+    
+    if lan_output:
+        lan_output.close()
+    
+    if osc_output:
+        osc_output.close()
+    
     logger.info("Application shutdown")
-    executor.shutdown(wait=True)
 
 if __name__ == "__main__":
     import uvicorn
