@@ -18,11 +18,13 @@ class CameraCapture:
         self.thread = None
         self.current_frame = None
         self._depth_placeholder = None
+        self.target_width = 1920  # Higher target resolution
+        self.target_height = 1080
         
     def _gstreamer_pipeline(self) -> str:
         return (
             f"v4l2src device=/dev/video{self.source} ! "
-            "video/x-raw, width=1280, height=720, framerate=30/1 ! "
+            f"video/x-raw, width={self.target_width}, height={self.target_height}, framerate=30/1 ! "
             "videoconvert ! appsink"
         )
     
@@ -33,9 +35,17 @@ class CameraCapture:
                 self.cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
             else:
                 self.cap = cv2.VideoCapture(int(self.source))
+                # Try to set higher resolution
+                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.target_width)
+                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.target_height)
             
             if not self.cap.isOpened():
                 raise RuntimeError("Could not open camera")
+            
+            # Get actual resolution
+            actual_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            actual_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            logger.info(f"Camera started at {actual_width}x{actual_height}")
             
             self.running = True
             self.thread = threading.Thread(

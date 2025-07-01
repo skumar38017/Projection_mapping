@@ -9,25 +9,30 @@ from .object_detector import Detection
 
 class ShapeAnalyzer:
     def __init__(self):
-        # Initialize MediaPipe solutions
+        # Initialize MediaPipe solutions with more generic settings
         self.mp_objectron = mp.solutions.objectron
         self.objectron = self.mp_objectron.Objectron(
             static_image_mode=False,
-            max_num_objects=20,
-            min_detection_confidence=0.5,
-            model_name='Cup'  # Can be changed based on expected objects
+            max_num_objects=100,
+            min_detection_confidence=0.4,  # Lower threshold for more detections
+            min_tracking_confidence=0.3,
+            model_name='Shoe'  # More generic model than 'Cup'
         )
-        
-        self.mp_drawing = mp.solutions.drawing_utils
-        self.mp_drawing_styles = mp.solutions.drawing_styles
         
         # Camera parameters (should be calibrated for your camera)
         self.focal_length = 1000  # Approximate focal length in pixels
         self.known_widths = {
-            "cup": 0.08,  # 8cm
-            "bottle": 0.07,
-            "person": 0.5,  # Shoulder width
-            # Add more known widths for common objects
+            # Add more known dimensions for common objects
+            # "cup": 0.08,
+            # "bottle": 0.07,
+            # "person": 0.5,
+            # "chair": 0.4,
+            # "car": 1.8,
+            # "book": 0.2,
+            # "cell phone": 0.07,
+            # "keyboard": 0.35,
+            # # Default fallback
+            "default": 0.2
         }
     
     def _analyze_without_depth(self, frame: np.ndarray, detection: Detection) -> Optional[Shape3D]:
@@ -40,15 +45,11 @@ class ShapeAnalyzer:
     
         if shape:
             # Adjust dimensions based on detection confidence and known widths
-            if detection.label.lower() in self.known_widths:
-                known_width = self.known_widths[detection.label.lower()]
-                scale_factor = known_width / shape.width
-                shape.width = known_width
-                shape.height *= scale_factor
-                shape.depth *= scale_factor
-            else:
-                # Default scaling for unknown objects
-                shape.depth = 0.1 * shape.width
+            known_width = self.known_widths.get(detection.label.lower(), self.known_widths["default"])
+            scale_factor = known_width / shape.width
+            shape.width = known_width
+            shape.height *= scale_factor
+            shape.depth *= scale_factor
     
         return shape
 
@@ -87,14 +88,12 @@ class ShapeAnalyzer:
                 height_px = self._distance(points_3d[0], points_3d[2])
                 depth_px = self._distance(points_3d[0], points_3d[4])
                 
-                # Estimate real-world dimensions
-                # For better accuracy, you should use depth information or stereo camera
-                # Here we use a simple perspective projection approximation
-                distance = self._estimate_distance(detection.bbox, frame.shape)
+                # Estimate real-world dimensions using depth information
+                z = np.median(depth[y1:y2, x1:x2][depth[y1:y2, x1:x2] > 0])
                 
-                width_m = (width_px * distance) / self.focal_length
-                height_m = (height_px * distance) / self.focal_length
-                depth_m = (depth_px * distance) / self.focal_length
+                width_m = (width_px * z) / self.focal_length
+                height_m = (height_px * z) / self.focal_length
+                depth_m = (depth_px * z) / self.focal_length
                 
                 # Determine shape type based on proportions
                 shape_type = self._determine_shape_type(width_m, height_m, depth_m)
@@ -109,7 +108,7 @@ class ShapeAnalyzer:
         
         # Fallback to contour-based 2D shape detection if 3D fails
         return self._contour_based_shape_detection(roi)
-    
+
     def _estimate_distance(self, bbox: Tuple[int, int, int, int], image_shape: Tuple[int, int]) -> float:
         """Estimate distance to object based on bounding box size (very rough approximation)"""
         x1, y1, x2, y2 = bbox
