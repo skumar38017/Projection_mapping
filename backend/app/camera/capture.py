@@ -9,7 +9,7 @@ from typing import Optional, Tuple
 logger = logging.getLogger(__name__)
 
 class CameraCapture:
-    def __init__(self, source: str = "0", use_gstreamer: bool = False):
+    def __init__(self, source: str = "2", use_gstreamer: bool = False):
         self.source = source
         self.use_gstreamer = use_gstreamer
         self.cap = None
