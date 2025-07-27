@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Random Object Verification System</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 1rem 2rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            backdrop-filter: blur(10px);
+        }
+
+        .header h1 {
+            color: #2c3e50;
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .controls {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        select, button {
+            padding: 0.5rem 1rem;
+            border: 2px solid #3498db;
+            border-radius: 5px;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+        }
+
+        select {
+            background: white;
+            min-width: 150px;
+        }
+
+        button {
+            background: #3498db;
+            color: white;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        button:hover {
+            background: #2980b9;
+            transform: translateY(-2px);
+        }
+
+        button:disabled {
+            background: #bdc3c7;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .start-btn {
+            background: #27ae60;
+        }
+
+        .start-btn:hover {
+            background: #229954;
+        }
+
+        .stop-btn {
+            background: #e74c3c;
+        }
+
+        .stop-btn:hover {
+            background: #c0392b;
+        }
+
+        .status {
+            padding: 0.5rem 1rem;
+            border-radius: 5px;
+            font-weight: bold;
+            margin-left: auto;
+        }
+
+        .status.connected {
+            background: #d5f4e6;
+            color: #27ae60;
+        }
+
+        .status.disconnected {
+            background: #fadbd8;
+            color: #e74c3c;
+        }
+
+        .status.streaming {
+            background: #d6eaf8;
+            color: #3498db;
+        }
+
+        .main-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: 1fr 1fr;
+            gap: 1rem;
+            padding: 1rem;
+            height: calc(100vh - 120px);
+        }
+
+        .panel {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 10px;
+            padding: 1rem;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            backdrop-filter: blur(10px);
+            overflow: hidden;
+        }
+
+        .panel h3 {
+            color: #2c3e50;
+            margin-bottom: 1rem;
+            font-size: 1.2rem;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 0.5rem;
+        }
+
+        .reference-images {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+            gap: 0.5rem;
+            max-height: calc(100% - 60px);
+            overflow-y: auto;
+        }
+
+        .reference-image {
+            position: relative;
+            aspect-ratio: 1;
+            border-radius: 5px;
+            overflow: hidden;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            transition: transform 0.3s ease;
+        }
+
+        .reference-image:hover {
+            transform: scale(1.05);
+        }
+
+        .reference-image img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .reference-image .filename {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 0.25rem;
+            font-size: 0.7rem;
+            text-align: center;
+        }
+
+        .video-container {
+            position: relative;
+            width: 100%;
+            height: calc(100% - 60px);
+            background: #000;
+            border-radius: 5px;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .video-container img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+
+        .video-placeholder {
+            color: #7f8c8d;
+            font-size: 1.2rem;
+            text-align: center;
+        }
+
+        .match-details {
+            max-height: calc(100% - 60px);
+            overflow-y: auto;
+        }
+
+        .match-info {
+            background: #f8f9fa;
+            border-radius: 5px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            border-left: 4px solid #3498db;
+        }
+
+        .match-info.success {
+            border-left-color: #27ae60;
+            background: #d5f4e6;
+        }
+
+        .match-info.no-match {
+            border-left-color: #e74c3c;
+            background: #fadbd8;
+        }
+
+        .match-info h4 {
+            margin-bottom: 0.5rem;
+            color: #2c3e50;
+        }
+
+        .match-info p {
+            margin: 0.25rem 0;
+            font-size: 0.9rem;
+        }
+
+        .match-history {
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 0.5rem;
+        }
+
+        .history-item {
+            padding: 0.5rem;
+            border-bottom: 1px solid #eee;
+            font-size: 0.8rem;
+        }
+
+        .history-item:last-child {
+            border-bottom: none;
+        }
+
+        .fps-counter {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 0.25rem 0.5rem;
+            border-radius: 3px;
+            font-size: 0.8rem;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error-message {
+            background: #fadbd8;
+            color: #e74c3c;
+            padding: 1rem;
+            border-radius: 5px;
+            margin: 1rem 0;
+            border-left: 4px solid #e74c3c;
+        }
+
+        @media (max-width: 768px) {
+            .main-container {
+                grid-template-columns: 1fr;
+                grid-template-rows: auto auto auto auto;
+                height: auto;
+            }
+            
+            .controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .control-group {
+                justify-content: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🎯 Random Object Verification System</h1>
+        <div class="controls">
+            <div class="control-group">
+                <label for="cameraSelect">📹 Camera:</label>
+                <select id="cameraSelect">
+                    <option value="">Select Camera...</option>
+                </select>
+            </div>
+            
+            <div class="control-group">
+                <button id="startBtn" class="start-btn">▶️ Start</button>
+                <button id="stopBtn" class="stop-btn" disabled>⏹️ Stop</button>
+                <button id="refreshBtn">🔄 Refresh Cameras</button>
+            </div>
+            
+            <div class="status disconnected" id="status">
+                🔴 Disconnected
+            </div>
+        </div>
+    </div>
+
+    <div class="main-container">
+        <!-- Top Left: Reference Images -->
+        <div class="panel">
+            <h3>📁 Reference Images</h3>
+            <div class="reference-images" id="referenceImages">
+                <div class="loading"></div>
+            </div>
+        </div>
+
+        <!-- Top Right: Live Original Video -->
+        <div class="panel">
+            <h3>📺 Live Camera Feed</h3>
+            <div class="video-container">
+                <div class="video-placeholder" id="originalVideoPlaceholder">
+                    Select a camera and click Start to begin streaming
+                </div>
+                <img id="originalVideo" style="display: none;" alt="Original Video">
+                <div class="fps-counter" id="fpsCounter" style="display: none;">FPS: 0</div>
+            </div>
+        </div>
+
+        <!-- Bottom Left: Match Details -->
+        <div class="panel">
+            <h3>🔍 Detection Details</h3>
+            <div class="match-details" id="matchDetails">
+                <div class="match-info">
+                    <h4>Waiting for detection...</h4>
+                    <p>Start the camera to begin object verification</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom Right: Processed Video -->
+        <div class="panel">
+            <h3>🎯 Detection Results</h3>
+            <div class="video-container">
+                <div class="video-placeholder" id="processedVideoPlaceholder">
+                    Processed video will appear here
+                </div>
+                <img id="processedVideo" style="display: none;" alt="Processed Video">
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>

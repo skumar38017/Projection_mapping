@@ -1,0 +1,14 @@
+backend/
+├── .env
+├── main.py                     # FastAPI entry point
+├── matcher.py                  # Traditional ORB matcher
+├── app/
+│   ├── config.py               # Loads env & Pinecone settings
+│   ├── object_detector.py      # Core object detection & matching logic
+│   ├── feature_extractor.py    # ORB-based and deep feature extractor
+│   ├── router.py               # Optional if using REST API routes
+│   ├── utils.py                # Image utils like base64 conversion
+│   ├── webrtc_signaling.py     # WebSocket handler for live video
+│   └── assets/                 # Reference object images
+├── debug/                      # Saved intermediate frames
+└── requirements.txt

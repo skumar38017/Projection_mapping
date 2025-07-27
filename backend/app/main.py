@@ -1,20 +1,13 @@
-# ~/app/main.py
+# app/main.py
+from fastapi import FastAPI, WebSocket, HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, FileResponse
+from app.webrtc_signaling import signaling_endpoint
+from app.config import settings
+from app.object_detector import ObjectDetector
+import os
 import logging
-from typing import Dict, Any, List, Union
-import time
-import datetime
-import threading
-import cv2
-from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles  # Add this import
 from pathlib import Path
-import asyncio
-import uvloop
-from concurrent.futures import ThreadPoolExecutor
-from app.network.lan_output import LANOutput
-from app.network.osc_output import OSCOutput
-from app.camera_factory import CameraFactory
-from app.routes.router import router, init_routers
 
 # Configure logging
 logging.basicConfig(
@@ -23,94 +16,140 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-uvloop.install()
+# Create FastAPI app
 app = FastAPI(
-    title="3D Shape Detection API",
-    description="Advanced 3D shape detection with real-time streaming",
-    version="1.0.0"
+    title=settings.PROJECT_NAME,
+    version=settings.VERSION,
+    description="Real-time Object Verification System with Multiple Camera Support"
 )
 
-# Configuration
-BASE_DIR = Path(__file__).parent
-STATIC_DIR = BASE_DIR / "static"
+# Mount static files
+app.mount("/static", StaticFiles(directory=str(settings.STATIC_DIR)), name="static")
+app.mount("/assets", StaticFiles(directory=str(settings.ASSETS_DIR)), name="assets")
 
-if not STATIC_DIR.exists():
-    raise RuntimeError(f"Static directory not found at {STATIC_DIR}")
+@app.get("/", response_class=HTMLResponse)
+async def get_index():
+    """Serve the main HTML page"""
+    index_path = settings.STATIC_DIR / "index.html"
+    if index_path.exists():
+        return FileResponse(str(index_path))
+    else:
+        return HTMLResponse("""
+        <html>
+            <head><title>Object Verification System</title></head>
+            <body>
+                <h1>Object Verification System</h1>
+                <p>Frontend not found. Please check static/index.html</p>
+            </body>
+        </html>
+        """)
 
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-executor = ThreadPoolExecutor(max_workers=4)
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for real-time communication"""
+    await signaling_endpoint(websocket)
 
-# Initialize components
-camera = None
-lan_output = LANOutput(host='255.255.255.255', port=5000, debug=True)
-osc_output = OSCOutput(ip='localhost', port=5005, debug=True)
+@app.get("/api/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "project": settings.PROJECT_NAME,
+        "version": settings.VERSION,
+        "assets_count": len([f for f in os.listdir(settings.ASSETS_DIR) 
+                           if f.lower().endswith(('.png', '.jpg', '.jpeg'))])
+    }
 
-def start_continuous_outputs():
-    """Start continuous LAN and OSC output in background threads with error handling"""
-    def lan_continuous():
-        while True:
-            try:
-                test_data = {
-                    "type": "continuous_lan",
-                    "timestamp": datetime.datetime.now().isoformat(),
-                    "values": [1.2, 3.4, 5.6]
-                }
-                lan_output.send_data(test_data)
-                logger.debug("Sent continuous LAN data")
-            except Exception as e:
-                logger.error(f"LAN continuous output error: {str(e)}")
-            time.sleep(1.0)
-            
-    def osc_continuous():
-        while True:
-            try:
-                test_data = {
-                    "test": "continuous_osc",
-                    "timestamp": datetime.datetime.now().isoformat(),
-                    "values": [7.8, 9.0, 1.2]
-                }
-                osc_output.send_data("/continuous", test_data)
-                logger.debug("Sent continuous OSC data")
-            except Exception as e:
-                logger.error(f"OSC continuous output error: {str(e)}")
-            time.sleep(1.0)
+@app.get("/api/reference-images")
+async def get_reference_images():
+    """Get list of reference images"""
+    images = []
     
-    # Start both continuous outputs
-    executor.submit(lan_continuous)
-    executor.submit(osc_continuous)
-    logger.info("Started continuous LAN and OSC output threads")
+    for filename in os.listdir(settings.ASSETS_DIR):
+        if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+            filepath = settings.ASSETS_DIR / filename
+            file_size = os.path.getsize(filepath)
+            
+            images.append({
+                "filename": filename,
+                "size": file_size,
+                "url": f"/assets/{filename}"
+            })
+    
+    return {"images": images}
 
-@app.on_event("startup")
-async def startup():
-    global camera
+@app.get("/api/settings")
+async def get_settings():
+    """Get current detection settings"""
+    return {
+        "feature_threshold": settings.FEATURE_MATCH_THRESHOLD,
+        "deep_threshold": settings.DEEP_MATCH_THRESHOLD,
+        "detection_confidence": settings.DETECTION_CONFIDENCE,
+        "camera_width": settings.DEFAULT_CAMERA_WIDTH,
+        "camera_height": settings.DEFAULT_CAMERA_HEIGHT,
+        "fps": settings.DEFAULT_FPS
+    }
+
+@app.post("/api/test-detector")
+async def test_detector():
+    """Test if the object detector can be initialized"""
     try:
-        camera = CameraFactory.create_camera()
-        if camera is None:
-            raise RuntimeError("Failed to initialize any camera")
+        detector = ObjectDetector()
+        ref_images = detector.get_reference_images_info()
         
-        logger.info(f"Using camera: {camera.get_camera_info()}")
-        
-        # Initialize routers with dependencies
-        init_routers(camera, lan_output, osc_output, executor, STATIC_DIR)
-        
-        # Include the router
-        app.include_router(router)
-        
-        # Start continuous outputs
-        start_continuous_outputs()
+        return {
+            "status": "success",
+            "reference_images_loaded": len(ref_images),
+            "feature_extractor": detector.feature_extractor is not None,
+            "deep_extractor": detector.deep_feature_extractor is not None,
+            "detection_model": detector.detection_model is not None
+        }
     except Exception as e:
-        logger.error(f"Startup failed: {str(e)}")
-        raise
+        logger.error(f"Detector test failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.on_event("shutdown")
-async def shutdown():
-    if camera:
-        camera.release()
-    lan_output.close()
-    osc_output.close()
-    logger.info("Application shutdown")
-    executor.shutdown(wait=True)
+@app.get("/api/debug")
+async def debug_info():
+    """Debug endpoint to check system status"""
+    try:
+        from app.webrtc_signaling import camera_manager, get_reference_images_list
+        
+        # Get camera info
+        cameras = camera_manager.get_available_cameras()
+        
+        # Get reference images
+        ref_images = get_reference_images_list()
+        
+        return {
+            "status": "ok",
+            "cameras_found": len(cameras),
+            "cameras": cameras,
+            "reference_images_found": len(ref_images),
+            "reference_images": [{"filename": img["filename"], "size": img["size"]} for img in ref_images],
+            "assets_dir": str(settings.ASSETS_DIR),
+            "assets_exists": settings.ASSETS_DIR.exists(),
+            "static_dir": str(settings.STATIC_DIR),
+            "static_exists": settings.STATIC_DIR.exists()
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "assets_dir": str(settings.ASSETS_DIR),
+            "static_dir": str(settings.STATIC_DIR)
+        }
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_config=None)
+    
+    logger.info(f"Starting {settings.PROJECT_NAME} v{settings.VERSION}")
+    logger.info(f"Assets directory: {settings.ASSETS_DIR}")
+    logger.info(f"Static directory: {settings.STATIC_DIR}")
+    
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        log_level="info"
+    )
