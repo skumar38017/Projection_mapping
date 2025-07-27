@@ -29,15 +29,32 @@ class Settings:
         self.STATIC_DIR.mkdir(exist_ok=True)
         
         # Pinecone configuration
-        self.PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+        self.PINECONE_API_KEY = os.getenv("PINECONE_API_KEY", "pcsk_bhk7k_PYNYt8hgKtXVvdC6Swv1m8XJRjC1VKTRB8Y8fUVghw6Lidd9cVQQ8xUvP4pTSFF")
         self.PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT", "us-east-1")
         self.PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "object-verification")
         self.DIMENSION = int(os.getenv("DIMENSION", "1280"))  # EfficientNetB0 output dimension
         
-        # Detection thresholds
-        self.FEATURE_MATCH_THRESHOLD = float(os.getenv("FEATURE_MATCH_THRESHOLD", "0.3"))
-        self.DEEP_MATCH_THRESHOLD = float(os.getenv("DEEP_MATCH_THRESHOLD", "0.7"))
-        self.DETECTION_CONFIDENCE = float(os.getenv("DETECTION_CONFIDENCE", "0.5"))
+        # GPU/CPU Configuration - Dynamic Resource Allocation
+        self.USE_GPU = os.getenv("USE_GPU", "auto").lower()  # auto, true, false
+        self.FORCE_CPU_TENSORFLOW = os.getenv("FORCE_CPU_TENSORFLOW", "false").lower() == "true"
+        self.FORCE_CPU_PYTORCH = os.getenv("FORCE_CPU_PYTORCH", "false").lower() == "true"
+        self.DYNAMIC_MEMORY = os.getenv("DYNAMIC_MEMORY", "true").lower() == "true"  # Enable dynamic memory allocation
+        self.GPU_MEMORY_LIMIT = None if self.DYNAMIC_MEMORY else int(os.getenv("GPU_MEMORY_LIMIT", "0"))  # 0 = no limit
+        
+        # Detection thresholds - 60% threshold for "Matched" vs "Not Matched"
+        self.FEATURE_MATCH_THRESHOLD = float(os.getenv("FEATURE_MATCH_THRESHOLD", "0.6"))  # 60% for feature matching
+        self.DEEP_MATCH_THRESHOLD = float(os.getenv("DEEP_MATCH_THRESHOLD", "0.6"))        # 60% for deep learning match
+        self.DETECTION_CONFIDENCE = float(os.getenv("DETECTION_CONFIDENCE", "0.5"))        # Object detection confidence
+        
+        # Performance settings for low latency and high accuracy
+        self.TARGET_FPS = int(os.getenv("TARGET_FPS", "30"))
+        self.MAX_PROCESSING_TIME = float(os.getenv("MAX_PROCESSING_TIME", "0.020"))  # 20ms max processing time
+        
+        # Network broadcasting settings
+        self.OSC_PORT = int(os.getenv("OSC_PORT", "8001"))
+        self.TCP_PORT = int(os.getenv("TCP_PORT", "8002"))
+        self.UDP_PORT = int(os.getenv("UDP_PORT", "8003"))
+        self.BROADCAST_ENABLED = os.getenv("BROADCAST_ENABLED", "true").lower() == "true"
         
         # Camera settings
         self.DEFAULT_CAMERA_WIDTH = int(os.getenv("CAMERA_WIDTH", "640"))

@@ -4,10 +4,12 @@ import cv2
 import numpy as np
 import json
 import asyncio
+import time
 from fastapi import WebSocket, WebSocketDisconnect
-from app.object_detector import verify_object_from_frame, ObjectDetector
+from app.simple_matcher import simple_object_matching, get_simple_matcher
 from app.config import settings
-from app.utils import image_to_base64
+from app.utils import image_to_base64, make_json_serializable
+from app.resource_monitor import resource_monitor
 import logging
 from datetime import datetime
 import os
@@ -96,7 +98,10 @@ class CameraManager:
     def start_camera(self, camera_id=0):
         """Start camera streaming"""
         try:
+            print(f"\n📷 [CAMERA] Starting camera {camera_id}...")
+            
             if self.active_camera is not None:
+                print(f"🔄 [CAMERA] Stopping existing camera...")
                 self.stop_camera()
             
             self.active_camera = cv2.VideoCapture(camera_id)
@@ -108,26 +113,41 @@ class CameraManager:
             self.active_camera.set(cv2.CAP_PROP_FRAME_HEIGHT, settings.DEFAULT_CAMERA_HEIGHT)
             self.active_camera.set(cv2.CAP_PROP_FPS, settings.DEFAULT_FPS)
             
+            # Get actual properties
+            actual_width = int(self.active_camera.get(cv2.CAP_PROP_FRAME_WIDTH))
+            actual_height = int(self.active_camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            actual_fps = int(self.active_camera.get(cv2.CAP_PROP_FPS))
+            
             self.is_streaming = True
-            self.detector = ObjectDetector()
+            # Use simple matcher - exactly what you requested
+            self.matcher = get_simple_matcher()
+            
+            print(f"✅ [CAMERA] Camera {camera_id} started successfully")
+            print(f"   📐 Resolution: {actual_width}x{actual_height}")
+            print(f"   🎬 FPS: {actual_fps}")
+            print(f"   🔍 Matcher: Simple object matching ready")
             
             logger.info(f"Started camera {camera_id}")
             return True
             
         except Exception as e:
+            print(f"💥 [CAMERA] Failed to start camera {camera_id}: {e}")
             logger.error(f"Failed to start camera {camera_id}: {e}")
             return False
     
     def stop_camera(self):
         """Stop camera streaming"""
         try:
+            print(f"\n🛑 [CAMERA] Stopping camera...")
             self.is_streaming = False
             if self.active_camera is not None:
                 self.active_camera.release()
                 self.active_camera = None
+            print(f"✅ [CAMERA] Camera stopped successfully")
             logger.info("Camera stopped")
             return True
         except Exception as e:
+            print(f"💥 [CAMERA] Failed to stop camera: {e}")
             logger.error(f"Failed to stop camera: {e}")
             return False
     
@@ -159,16 +179,22 @@ class ConnectionManager:
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
+        print(f"\n🔗 [CONNECTION] Client connected from {websocket.client}")
+        print(f"👥 [CLIENTS] Total connections: {len(self.active_connections)}")
         logger.info(f"Client connected. Total connections: {len(self.active_connections)}")
     
     def disconnect(self, websocket: WebSocket):
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
+        print(f"\n❌ [DISCONNECT] Client disconnected")
+        print(f"👥 [CLIENTS] Total connections: {len(self.active_connections)}")
         logger.info(f"Client disconnected. Total connections: {len(self.active_connections)}")
     
     async def send_personal_message(self, message: dict, websocket: WebSocket):
         try:
-            await websocket.send_text(json.dumps(message))
+            # Make message JSON serializable
+            serializable_message = make_json_serializable(message)
+            await websocket.send_text(json.dumps(serializable_message))
         except Exception as e:
             logger.error(f"Error sending message: {e}")
     
@@ -176,7 +202,9 @@ class ConnectionManager:
         disconnected = []
         for connection in self.active_connections:
             try:
-                await connection.send_text(json.dumps(message))
+                # Make message JSON serializable
+                serializable_message = make_json_serializable(message)
+                await connection.send_text(json.dumps(serializable_message))
             except Exception as e:
                 logger.error(f"Error broadcasting to connection: {e}")
                 disconnected.append(connection)
@@ -205,50 +233,104 @@ class ConnectionManager:
         logger.info("Stopped streaming task")
     
     async def _streaming_loop(self):
-        """Main streaming loop"""
+        """Main streaming loop with detailed logging"""
+        print(f"\n🎬 [STREAMING] Started streaming loop at {datetime.now().strftime('%H:%M:%S')}")
+        frame_count = 0
+        
         try:
             while camera_manager.is_streaming:
+                frame_count += 1
+                print(f"\n📹 [FRAME {frame_count}] Capturing frame...")
+                
                 frame = camera_manager.get_frame()
                 if frame is not None:
-                    # Process frame for object detection
-                    result, processed_frame = verify_object_from_frame(frame)
+                    print(f"✅ [CAMERA] Got frame: {frame.shape}")
                     
-                    # Convert frames to base64
-                    original_b64 = image_to_base64(frame)
-                    processed_b64 = image_to_base64(processed_frame)
-                    
-                    # Store match history
-                    if result["success"]:
-                        match_record = {
-                            "timestamp": result["timestamp"],
-                            "match": result["match_path"],
-                            "score": result["score"],
-                            "method": result["method"]
-                        }
-                        self.match_history.append(match_record)
+                    try:
+                        # Record frame processing start time
+                        frame_start_time = time.time()
                         
-                        # Keep only last 50 matches
-                        if len(self.match_history) > 50:
-                            self.match_history = self.match_history[-50:]
-                    
-                    # Broadcast to all connected clients
-                    message = {
-                        "type": "stream_frame",
-                        "original_frame": original_b64,
-                        "processed_frame": processed_b64,
-                        "result": result,
-                        "timestamp": datetime.now().isoformat()
-                    }
-                    
-                    await self.broadcast(message)
+                        # Simple matching: stored images vs real-time camera object
+                        result, processed_frame = simple_object_matching(frame)
+                        
+                        # Record frame processing time for resource monitoring
+                        frame_processing_time = time.time() - frame_start_time
+                        resource_monitor.record_frame_time(frame_processing_time)
+                        
+                        # Convert frames to base64
+                        print(f"🔄 [ENCODING] Converting frames to base64...")
+                        original_b64 = image_to_base64(frame)
+                        processed_b64 = image_to_base64(processed_frame)
+                        print(f"✅ [ENCODING] Frames encoded successfully")
+                        
+                        # Store match history
+                        if result["success"] and result.get("match_found", False):
+                            print(f"📝 [HISTORY] Storing match record...")
+                            match_record = {
+                                "timestamp": result["timestamp"],
+                                "match": result["matched_image"],
+                                "score": float(result["similarity_score"]),
+                                "method": result.get("method", "unknown")
+                            }
+                            self.match_history.append(match_record)
+                            
+                            # Keep only last 50 matches
+                            if len(self.match_history) > 50:
+                                self.match_history = self.match_history[-50:]
+                            
+                            print(f"✅ [HISTORY] Match stored. Total history: {len(self.match_history)}")
+                        
+                        # Broadcast to all connected clients
+                        message = {
+                            "type": "stream_frame",
+                            "original_frame": original_b64,
+                            "processed_frame": processed_b64,
+                            "result": result,
+                            "timestamp": datetime.now().isoformat(),
+                            "performance": {
+                                "processing_time": frame_processing_time,
+                                "fps": resource_monitor.average_fps,
+                                "mode": resource_monitor.performance_mode,
+                                "frame_number": frame_count
+                            }
+                        }
+                        
+                        print(f"🔍 [DEBUG] Result object being sent: {result}")
+                        print(f"🔍 [DEBUG] Result keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
+                        print(f"📡 [BROADCAST] Sending to {len(self.active_connections)} clients...")
+                        await self.broadcast(message)
+                        print(f"✅ [BROADCAST] Frame {frame_count} sent successfully")
+                        
+                    except Exception as e:
+                        print(f"💥 [ERROR] Frame processing failed: {e}")
+                        logger.error(f"Error processing frame: {e}")
+                        # Continue streaming even if one frame fails
+                        continue
                 
-                # Control frame rate
-                await asyncio.sleep(1/30)  # 30 FPS
+                else:
+                    print(f"⚠️ [CAMERA] No frame received")
+                
+                # Control frame rate dynamically based on performance
+                optimal_fps = resource_monitor.get_optimal_fps()
+                sleep_time = 1/optimal_fps
+                print(f"⏱️ [FPS] Sleeping {sleep_time*1000:.1f}ms for {optimal_fps} FPS")
+                await asyncio.sleep(sleep_time)
                 
         except asyncio.CancelledError:
+            print(f"\n🛑 [STREAMING] Loop cancelled after {frame_count} frames")
             logger.info("Streaming loop cancelled")
         except Exception as e:
+            print(f"\n💥 [STREAMING] Fatal error after {frame_count} frames: {e}")
             logger.error(f"Error in streaming loop: {e}")
+            # Try to notify clients about the error
+            try:
+                error_message = {
+                    "type": "error",
+                    "message": f"Streaming error: {str(e)}"
+                }
+                await self.broadcast(error_message)
+            except:
+                pass  # Don't let error handling cause more errors
 
 # Global connection manager
 manager = ConnectionManager()

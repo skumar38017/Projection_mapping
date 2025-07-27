@@ -31,6 +31,7 @@ class ObjectVerificationApp {
         this.processedVideoPlaceholder = document.getElementById('processedVideoPlaceholder');
         this.matchDetails = document.getElementById('matchDetails');
         this.fpsCounterElement = document.getElementById('fpsCounter');
+        this.matchStatusIndicator = document.getElementById('matchStatusIndicator');
     }
     
     setupEventListeners() {
@@ -64,10 +65,10 @@ class ObjectVerificationApp {
             this.ws.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
-                    console.log('Received WebSocket message:', data.type);
+                    console.log('Received WebSocket message:', data.type, data);
                     this.handleWebSocketMessage(data);
                 } catch (error) {
-                    console.error('Error parsing WebSocket message:', error);
+                    console.error('Error parsing WebSocket message:', error, event.data);
                 }
             };
             
@@ -159,6 +160,11 @@ class ObjectVerificationApp {
             this.isStreaming = true;
             this.updateStatus('streaming', '🔴 Streaming');
             this.updateButtons();
+            
+            // Update placeholder text to show streaming has started
+            this.originalVideoPlaceholder.textContent = 'Streaming...';
+            this.processedVideoPlaceholder.textContent = 'Processing frames...';
+            
             console.log(`Camera ${data.camera_id} started successfully`);
         } else {
             this.showError(`Failed to start camera: ${data.error}`);
@@ -177,18 +183,36 @@ class ObjectVerificationApp {
     }
     
     handleStreamFrame(data) {
+        console.log('=== STREAM FRAME DEBUG ===');
+        console.log('Full data received:', data);
+        console.log('Result object:', data.result);
+        console.log('Result keys:', Object.keys(data.result || {}));
+        console.log('match_found:', data.result?.match_found);
+        console.log('threshold_met:', data.result?.threshold_met);
+        console.log('similarity_score:', data.result?.similarity_score);
+        console.log('matched_image:', data.result?.matched_image);
+        console.log('method:', data.result?.method);
+        console.log('processing_time_ms:', data.result?.processing_time_ms);
+        console.log('========================');
+        
         // Update original video
-        this.originalVideo.src = `data:image/jpeg;base64,${data.original_frame}`;
-        this.originalVideo.style.display = 'block';
-        this.originalVideoPlaceholder.style.display = 'none';
+        if (data.original_frame) {
+            this.originalVideo.src = `data:image/jpeg;base64,${data.original_frame}`;
+            this.originalVideo.style.display = 'block';
+            this.originalVideoPlaceholder.style.display = 'none';
+        }
         
         // Update processed video
-        this.processedVideo.src = `data:image/jpeg;base64,${data.processed_frame}`;
-        this.processedVideo.style.display = 'block';
-        this.processedVideoPlaceholder.style.display = 'none';
+        if (data.processed_frame) {
+            this.processedVideo.src = `data:image/jpeg;base64,${data.processed_frame}`;
+            this.processedVideo.style.display = 'block';
+            this.processedVideoPlaceholder.style.display = 'none';
+        }
         
         // Update match details
-        this.updateMatchDetails(data.result);
+        if (data.result) {
+            this.updateMatchDetails(data.result);
+        }
         
         // Update FPS counter
         this.updateFPS();
@@ -247,6 +271,8 @@ class ObjectVerificationApp {
         
         this.referenceImages.forEach(imageInfo => {
             console.log(`Processing reference image: ${imageInfo.filename}`);
+            const objectId = this.generateObjectId(imageInfo.filename);
+            
             const imageDiv = document.createElement('div');
             imageDiv.className = 'reference-image';
             
@@ -254,36 +280,113 @@ class ObjectVerificationApp {
                 <img src="data:image/jpeg;base64,${imageInfo.image_data}" 
                      alt="${imageInfo.filename}"
                      title="${imageInfo.filename} (${imageInfo.width}x${imageInfo.height})">
-                <div class="filename">${imageInfo.filename}</div>
+                <div class="filename">
+                    <div style="font-weight: bold; margin-bottom: 2px;">${imageInfo.filename}</div>
+                    <div style="font-size: 0.6rem; color: #bbb;">🔗 ${objectId}</div>
+                </div>
             `;
             
             this.referenceImagesContainer.appendChild(imageDiv);
         });
         
-        console.log(`Displayed ${this.referenceImages.length} reference images`);
+        console.log(`Displayed ${this.referenceImages.length} reference images with Object IDs`);
     }
     
     updateMatchDetails(result) {
+        console.log('=== MATCH DETAILS DEBUG ===');
+        console.log('UpdateMatchDetails called with:', result);
+        console.log('Type of result:', typeof result);
+        console.log('Result keys:', Object.keys(result || {}));
+        
+        // Handle different possible data structures
+        let match_found = false;
+        let similarity_score = 0;
+        let matched_image = null;
+        let method = 'Unknown';
+        let processing_time_ms = 0;
+        let timestamp = new Date().toISOString();
+        let threshold_met = false;
+        
+        if (result) {
+            // Try different possible field names
+            match_found = result.match_found === true || result.matched === true || result.success === true;
+            threshold_met = result.threshold_met === true;
+            similarity_score = result.similarity_score || result.confidence || result.score || 0;
+            matched_image = result.matched_image || result.match_path || result.image;
+            method = result.method || 'Unknown';
+            processing_time_ms = result.processing_time_ms || (result.processing_time * 1000) || 0;
+            timestamp = result.timestamp || new Date().toISOString();
+            
+            console.log('Parsed values:');
+            console.log('- match_found:', match_found);
+            console.log('- threshold_met:', threshold_met);
+            console.log('- similarity_score:', similarity_score);
+            console.log('- matched_image:', matched_image);
+            console.log('- method:', method);
+            console.log('- processing_time_ms:', processing_time_ms);
+        }
+        
         const matchInfo = document.createElement('div');
-        matchInfo.className = `match-info ${result.success ? 'success' : 'no-match'}`;
         
-        const timestamp = new Date(result.timestamp).toLocaleTimeString();
+        // Only show as match if both match_found AND threshold_met are true
+        const isMatch = match_found && threshold_met;
+        console.log('Final isMatch determination:', isMatch);
+        console.log('========================');
         
-        if (result.success) {
+        matchInfo.className = `match-info ${isMatch ? 'success' : 'no-match'}`;
+        
+        // Update status indicator
+        this.updateMatchStatusIndicator(isMatch);
+        
+        const displayTime = new Date(timestamp).toLocaleTimeString();
+        const scorePercent = (similarity_score * 100).toFixed(1);
+        
+        if (isMatch) {
+            // Create enhanced match display with image
+            const matchedImageSrc = this.getMatchedImageSrc(matched_image);
+            const objectId = this.generateObjectId(matched_image);
+            
             matchInfo.innerHTML = `
-                <h4>✅ Match Found!</h4>
-                <p><strong>Image:</strong> ${result.match_path}</p>
-                <p><strong>Score:</strong> ${(result.score * 100).toFixed(1)}%</p>
-                <p><strong>Method:</strong> ${result.method || 'Unknown'}</p>
-                <p><strong>Time:</strong> ${timestamp}</p>
-                ${result.processing_time ? `<p><strong>Processing:</strong> ${(result.processing_time * 1000).toFixed(1)}ms</p>` : ''}
+                <div style="display: flex; gap: 1rem; align-items: flex-start;">
+                    <div style="flex-shrink: 0;">
+                        ${matchedImageSrc ? `
+                            <img src="${matchedImageSrc}" 
+                                 alt="${matched_image}" 
+                                 style="width: 80px; height: 80px; object-fit: cover; border-radius: 5px; border: 2px solid #27ae60;">
+                        ` : `
+                            <div style="width: 80px; height: 80px; background: #f0f0f0; border-radius: 5px; display: flex; align-items: center; justify-content: center; font-size: 0.8rem; color: #666;">
+                                📷 Image
+                            </div>
+                        `}
+                    </div>
+                    <div style="flex: 1;">
+                        <h4 style="color: #27ae60; margin: 0 0 0.5rem 0;">✅ Match Found!</h4>
+                        <div style="font-size: 0.9rem; line-height: 1.4;">
+                            <p style="margin: 0.2rem 0;"><strong>📄 Reference Image:</strong> ${matched_image || 'Unknown'}</p>
+                            <p style="margin: 0.2rem 0;"><strong>🕒 Detected At:</strong> ${displayTime}</p>
+                            <p style="margin: 0.2rem 0;"><strong>✅ Match Confidence:</strong> ${scorePercent}%</p>
+                            <p style="margin: 0.2rem 0;"><strong>🔗 Object ID:</strong> ${objectId}</p>
+                            <p style="margin: 0.2rem 0;"><strong>🔍 Method:</strong> ${method}</p>
+                            <p style="margin: 0.2rem 0;"><strong>⏱️ Processing:</strong> ${processing_time_ms.toFixed(1)}ms</p>
+                            <p style="margin: 0.2rem 0;"><strong>📁 Reference Folder:</strong> assets/${matched_image || 'unknown'}</p>
+                        </div>
+                    </div>
+                </div>
             `;
         } else {
+            const bestCandidate = result?.details?.best_candidate || matched_image || 'None';
             matchInfo.innerHTML = `
-                <h4>❌ No Match</h4>
-                <p><strong>Best Score:</strong> ${(result.score * 100).toFixed(1)}%</p>
-                <p><strong>Time:</strong> ${timestamp}</p>
-                ${result.processing_time ? `<p><strong>Processing:</strong> ${(result.processing_time * 1000).toFixed(1)}ms</p>` : ''}
+                <div>
+                    <h4 style="color: #e74c3c; margin: 0 0 0.5rem 0;">❌ No Match Found</h4>
+                    <div style="font-size: 0.9rem; line-height: 1.4;">
+                        <p style="margin: 0.2rem 0;"><strong>📊 Best Score:</strong> ${scorePercent}%</p>
+                        <p style="margin: 0.2rem 0;"><strong>📸 Best Candidate:</strong> ${bestCandidate}</p>
+                        <p style="margin: 0.2rem 0;"><strong>🎯 Threshold:</strong> 60.0% (Required for match)</p>
+                        <p style="margin: 0.2rem 0;"><strong>🔍 Method:</strong> ${method}</p>
+                        <p style="margin: 0.2rem 0;"><strong>🕒 Time:</strong> ${displayTime}</p>
+                        <p style="margin: 0.2rem 0;"><strong>⏱️ Processing:</strong> ${processing_time_ms.toFixed(1)}ms</p>
+                    </div>
+                </div>
             `;
         }
         
@@ -294,6 +397,44 @@ class ObjectVerificationApp {
         while (this.matchDetails.children.length > 10) {
             this.matchDetails.removeChild(this.matchDetails.lastChild);
         }
+    }
+    
+    updateMatchStatusIndicator(isMatch) {
+        if (!this.matchStatusIndicator) return;
+        
+        this.matchStatusIndicator.className = 'match-status-indicator';
+        
+        if (isMatch) {
+            this.matchStatusIndicator.classList.add('match-true');
+            this.matchStatusIndicator.innerHTML = '<span class="status-text">✅ TRUE</span>';
+        } else {
+            this.matchStatusIndicator.classList.add('match-false');
+            this.matchStatusIndicator.innerHTML = '<span class="status-text">❌ FALSE</span>';
+        }
+    }
+    
+    generateObjectId(imageName) {
+        if (!imageName) return 'unknown_000';
+        
+        // Remove file extension and create a clean object ID
+        const baseName = imageName.replace(/\.[^/.]+$/, "");
+        const cleanName = baseName.toLowerCase().replace(/[^a-z0-9]/g, '_');
+        
+        // Generate a 3-digit number based on the image name for consistency
+        let hash = 0;
+        for (let i = 0; i < imageName.length; i++) {
+            hash = ((hash << 5) - hash + imageName.charCodeAt(i)) & 0xffffffff;
+        }
+        const objectNumber = Math.abs(hash) % 1000;
+        const paddedNumber = objectNumber.toString().padStart(3, '0');
+        
+        return `${cleanName}_${paddedNumber}`;
+    }
+    
+    getMatchedImageSrc(imageName) {
+        // Find the matched image from reference images
+        const matchedRef = this.referenceImages.find(ref => ref.filename === imageName);
+        return matchedRef ? `data:image/jpeg;base64,${matchedRef.image_data}` : null;
     }
     
     updateFPS() {
@@ -322,9 +463,27 @@ class ObjectVerificationApp {
     hideVideoStreams() {
         this.originalVideo.style.display = 'none';
         this.originalVideoPlaceholder.style.display = 'block';
+        this.originalVideoPlaceholder.textContent = 'Select a camera and click Start to begin streaming';
+        
         this.processedVideo.style.display = 'none';
         this.processedVideoPlaceholder.style.display = 'block';
+        this.processedVideoPlaceholder.textContent = 'Processed video will appear here';
+        
         this.fpsCounterElement.style.display = 'none';
+        
+        // Reset status indicator
+        if (this.matchStatusIndicator) {
+            this.matchStatusIndicator.className = 'match-status-indicator waiting';
+            this.matchStatusIndicator.innerHTML = '<span class="status-text">WAITING</span>';
+        }
+        
+        // Reset match details
+        this.matchDetails.innerHTML = `
+            <div class="match-info">
+                <h4>Waiting for detection...</h4>
+                <p>Start the camera to begin object verification</p>
+            </div>
+        `;
     }
     
     startCamera() {

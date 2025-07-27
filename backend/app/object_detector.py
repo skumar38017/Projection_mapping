@@ -14,6 +14,7 @@ from torchvision.models.detection import fasterrcnn_resnet50_fpn
 from torchvision.transforms import functional as F
 from app.config import settings
 from app.utils import draw_bounding_box
+from app.gpu_utils import auto_configure_gpu, gpu_manager
 import time
 from datetime import datetime
 
@@ -21,6 +22,18 @@ logger = logging.getLogger(__name__)
 
 class ObjectDetector:
     def __init__(self):
+        # Configure GPU/CPU based on settings with dynamic allocation
+        self.tf_using_gpu, self.pytorch_device = auto_configure_gpu(
+            use_gpu=settings.USE_GPU,
+            force_cpu_tf=settings.FORCE_CPU_TENSORFLOW,
+            force_cpu_torch=settings.FORCE_CPU_PYTORCH,
+            memory_limit=settings.GPU_MEMORY_LIMIT,
+            dynamic_memory=settings.DYNAMIC_MEMORY
+        )
+        
+        # Print GPU status
+        gpu_manager.print_status()
+        
         # Initialize multiple detection methods
         self.feature_extractor = self._init_feature_extractor()
         self.deep_feature_extractor = self._init_deep_feature_extractor()
@@ -52,30 +65,31 @@ class ObjectDetector:
     def _init_deep_feature_extractor(self):
         """Initialize deep feature extractor using EfficientNet"""
         try:
+            # TensorFlow GPU/CPU configuration is already handled by gpu_manager
             base_model = EfficientNetB0(weights='imagenet', include_top=False, pooling='avg')
             model = Model(inputs=base_model.input, outputs=base_model.output)
-            logger.info("EfficientNetB0 model loaded successfully")
+            
+            device_info = "GPU" if self.tf_using_gpu else "CPU"
+            logger.info(f"✅ EfficientNetB0 model loaded successfully ({device_info})")
             return model
         except Exception as e:
-            logger.error(f"Failed to load EfficientNetB0: {e}")
+            logger.error(f"❌ Failed to load EfficientNetB0: {e}")
             return None
         
     def _init_detection_model(self):
         """Initialize object detection model"""
         try:
-            if torch.cuda.is_available():
-                device = torch.device('cuda')
-                logger.info("Using CUDA for object detection")
-            else:
-                device = torch.device('cpu')
-                logger.info("Using CPU for object detection")
+            device = torch.device(self.pytorch_device)
+            logger.info(f"🎯 Using {device} for object detection")
                 
             model = fasterrcnn_resnet50_fpn(pretrained=True)
             model.eval()
             model.to(device)
+            
+            logger.info(f"✅ Faster R-CNN model loaded successfully ({device})")
             return model
         except Exception as e:
-            logger.error(f"Failed to load detection model: {e}")
+            logger.error(f"❌ Failed to load detection model: {e}")
             return None
     
     def _load_reference_features(self):
@@ -198,8 +212,9 @@ class ObjectDetector:
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             img_tensor = F.to_tensor(img).unsqueeze(0)
             
-            if torch.cuda.is_available():
-                img_tensor = img_tensor.to('cuda')
+            # Move tensor to the appropriate device
+            device = torch.device(self.pytorch_device)
+            img_tensor = img_tensor.to(device)
                 
             with torch.no_grad():
                 predictions = self.detection_model(img_tensor)
@@ -338,8 +353,8 @@ def verify_object_from_frame(frame: np.ndarray):
                     best_method = 'feature'
                     match_details = {
                         'method': 'ORB Feature Matching',
-                        'score': score,
-                        'threshold': detector.feature_match_threshold
+                        'score': float(score),  # Convert to Python float
+                        'threshold': float(detector.feature_match_threshold)  # Convert to Python float
                     }
                 
         # 2. Deep feature matching
@@ -351,8 +366,8 @@ def verify_object_from_frame(frame: np.ndarray):
                 best_method = 'deep'
                 match_details = {
                     'method': 'Deep Learning (EfficientNet)',
-                    'score': score,
-                    'threshold': detector.deep_match_threshold
+                    'score': float(score),  # Convert to Python float
+                    'threshold': float(detector.deep_match_threshold)  # Convert to Python float
                 }
         
         # 3. Object detection (optional enhancement)
@@ -360,8 +375,8 @@ def verify_object_from_frame(frame: np.ndarray):
         if boxes is not None and len(boxes) > 0:
             detection_score = np.max(scores)
             if detection_score > detector.detection_confidence:
-                match_details['detected_objects'] = len(boxes)
-                match_details['detection_confidence'] = detection_score
+                match_details['detected_objects'] = int(len(boxes))  # Convert to Python int
+                match_details['detection_confidence'] = float(detection_score)  # Convert to Python float
         
         # Determine if match is successful
         success = False
@@ -388,10 +403,10 @@ def verify_object_from_frame(frame: np.ndarray):
         return {
             "success": success,
             "match_path": best_match,
-            "score": best_score,
+            "score": float(best_score),  # Convert numpy float to Python float
             "method": best_method,
             "details": match_details,
-            "processing_time": processing_time,
+            "processing_time": float(processing_time),  # Convert numpy float to Python float
             "timestamp": datetime.now().isoformat()
         }, processed_frame
         
@@ -401,9 +416,9 @@ def verify_object_from_frame(frame: np.ndarray):
         return {
             "success": False,
             "match_path": None,
-            "score": 0,
+            "score": 0.0,
             "method": None,
             "details": {"error": str(e)},
-            "processing_time": time.time() - start_time,
+            "processing_time": float(time.time() - start_time),  # Convert to Python float
             "timestamp": datetime.now().isoformat()
         }, frame
